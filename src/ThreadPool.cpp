@@ -109,8 +109,7 @@ void ThreadPool::waitForTasks() {
 void ThreadPool::clearTasks() {
     std::unique_lock lock(queue_mutex);
     size_t taskCount = tasks.size();
-
-    std::priority_queue<TaskInfo> emptyQueue;
+    std::priority_queue<std::shared_ptr<TaskInfo>, std::vector<std::shared_ptr<TaskInfo>>, cmp> emptyQueue;
     std::swap(tasks, emptyQueue);
     
     size_t taskCountAfter = tasks.size();
@@ -137,17 +136,6 @@ ThreadPool::~ThreadPool() {
     std::cout << "~ThreadPool";
 }  
 
-// enqueue task
-// std::future<void> ThreadPool::enqueue(std::function<void()> task) {
-//     // create a new task
-//     auto _task = std::bind(task);
-//     std::packaged_task<void()> packaged_task(_task);
-//     // push task to the taskQueue, do not copy one, just use the same task
-//     this->tasks.push(std::move(_task));
-//     // getFurture
-//     return packaged_task.get_future();
-// }
-
 
 // wokrer thread
 // used for process task
@@ -155,7 +143,8 @@ void ThreadPool::workerThread(size_t id) {
     // loop, and check avaliable task
     while (true) {
         // declare target task
-        TaskInfo task {nullptr};
+        std::shared_ptr<TaskInfo> taskInfoPtr { nullptr };
+        // declare bool variable hasTask
         bool hasTask = false;
         {
             // try to grab the lock, wait
@@ -187,21 +176,22 @@ void ThreadPool::workerThread(size_t id) {
             metrics.waitingThreadCount--;
             // find task from queue
             if (tasks.size() > 0) {
-                task = tasks.top();
+                taskInfoPtr = tasks.top();
                 tasks.pop();    
-                hasTask = true;        
+                hasTask = true; 
             }   
         }
         // get startTime
         auto startTime = std::chrono::steady_clock::now();
         // the task is a lamda function, [task] -> { *task(); };
-        if (hasTask && task.task != nullptr) {
+        if (hasTask && taskInfoPtr && taskInfoPtr->task) {
             // execute task
             // not in sleep
             metrics.activeThreadCount++;
             metrics.updateActiveThreads(metrics.activeThreadCount);
             try {
-                task.task();
+                auto task = taskInfoPtr->task;
+                task();
                 metrics.completedTaskCount++;
             } catch(const std::exception& e) {
                 std::cerr << "异常发生在任务中: " << e.what() << std::endl;
@@ -210,6 +200,13 @@ void ThreadPool::workerThread(size_t id) {
                 std::cerr << "未知异常发生在任务中" << std::endl;
                 metrics.failedTaskCount++;
             }
+            // remove taskId from taskIdMap, after execute the task
+            // {
+            //     // grab the lock
+            //     std::unique_lock lock(queue_mutex);
+            //     auto taskId = taskInfoPtr->taskId;
+            //     taskIdMap.erase(taskId);
+            // }
             // update finish task, regardless whether the task failed or not
             // use atomic, get rid of lock
             metrics.activeThreadCount--;

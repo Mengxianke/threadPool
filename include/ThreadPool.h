@@ -4,6 +4,7 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
+#include <unordered_map>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -15,6 +16,31 @@
 #include "TaskInfo.h"
 #include <iostream>
 #include "ThreadPoolMetrics.h"
+
+// priority queue compare func
+struct cmp {
+    bool operator()(std::shared_ptr<TaskInfo>& taskInfo1, std::shared_ptr<TaskInfo>& taskInfo2) {
+        // priority
+        const TaskPriority& task1Priority = taskInfo1->priority;
+        const TaskPriority& task2Priority = taskInfo2->priority;
+        // taskSubmitTime
+        const std::chrono::steady_clock::time_point& task1SubmitTime = taskInfo1->submitTime;
+        const std::chrono::steady_clock::time_point& task2SubmitTime = taskInfo2->submitTime;
+        // compare taskPriority and taskSubmitTime
+        if (task1Priority > task2Priority) {
+            // maintain
+            return false;
+        } else if(task1Priority < task2Priority) {
+            // down
+            return true;
+        } else {
+            // equal condition, compare submit time
+            if (task1SubmitTime > task2SubmitTime) return true;
+            return false; 
+        }
+    }
+};
+
 
 class ThreadPool {
 public:
@@ -71,15 +97,16 @@ public:
     }
 
 private:
-    // 工作线程容器
+    // 工作线程容器 
     std::vector<std::thread> workers;
 
     // threads to stop when resize the worker
     std::unordered_set<size_t> threadsToStop;
-
+    
     // 任务队列
     // std::queue<function<void()>> tasks;
-    std::priority_queue<TaskInfo> tasks;
+    // 
+    std::priority_queue<std::shared_ptr<TaskInfo>, std::vector<std::shared_ptr<TaskInfo>>, cmp> tasks;
         
     // 同步机制
     std::mutex queue_mutex; 
@@ -96,6 +123,8 @@ private:
     bool isPaused = false;
     // metrics
     ThreadPoolMetrics metrics;
+    // unique_task_map, build relationShip between taskId and taskInfo
+    std::unordered_map<std::string, std::shared_ptr<TaskInfo>> taskIdMap;
 };
 
 
@@ -129,33 +158,37 @@ template<class F, class... Args>
                     }
                 } catch  (const std::exception& e) {
                     // promise set_exception
-                    std::cout << e.what()  << std::endl;
                     taskPromise->set_exception(std::current_exception());
                     // throw the error
                     throw;
                 } catch(...) {
-                    std::cout << "throw exception 2" << std::endl;
                     taskPromise->set_exception(std::current_exception());
                     throw;
                 }
             };
         {
-            // grab the lock
+            // grab the lock for race-condition data.
             std::unique_lock lock(queue_mutex);
             // is stop
             if(stop) {
                 throw std::runtime_error("enqueue on stopped ThreadPool");
             };
-
-            TaskInfo newTask = {
+            // judge if has duplicate taskId
+            // if (!taskId.empty() && taskIdMap.find(taskId) != taskIdMap.end()) {
+            //     throw std::runtime_error("Task ID '" + taskId + "' already exists");
+            // }
+            // make shared a taskInfo. use shared_ptr to control the lifeCycle of a TaskInfo
+            auto newTask = std::make_shared<TaskInfo> (
                 std::move(task),
                 priority,
                 taskId,
-                description,
-            };
-
+                description);
             // emplace the taskInfo
-            tasks.emplace(std::move(newTask));
+            tasks.emplace(newTask);
+            // set key-value pare for duplicate task
+            // if (!taskId.empty()) {
+            //     taskIdMap[taskId] = newTask; 
+            // }
             metrics.totalTasks++;
             metrics.updateQueueSize(tasks.size());
         }
@@ -174,7 +207,6 @@ template<class F, class... Args>
 template<class F, class... Args>
     auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
     // get a function return type
-    std::cout << "Enqueue func called";
     return enqueueWithInfo("", "", TaskPriority::MEDIUM, std::forward<F>(f), std::forward<Args>(args)...);
 }
 

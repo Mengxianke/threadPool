@@ -1,6 +1,7 @@
 #include "ThreadPool.h"
 #include <iostream>
 #include <chrono>
+#include <atomic>
 
 // 构造函数 - 第一天只是简单的占位实现
 ThreadPool::ThreadPool(size_t threads) {
@@ -36,7 +37,7 @@ void ThreadPool::resize(size_t threads) {
         for (size_t i = threads; i < worker_size; i++) {
             threadsToStop.emplace(i);
         }
-        // notify the all the thread. check wait condition
+        // notify all threads. check wait condition
         // first unlock, allow the thread to obatin the lock and do their job
         // noify all thread that threadstoStop have been upated
         lock.unlock();
@@ -137,6 +138,154 @@ ThreadPool::~ThreadPool() {
 }  
 
 
+// getTaskStatus by id
+TaskStatus ThreadPool::getTaskStatus(const std::string& taskId) {
+    auto iter = taskIdMap.find(taskId);
+    if (iter == taskIdMap.end()) {
+        return TaskStatus::NOT_FOUND;
+    }
+    auto taskInfoPtr = iter->second; 
+    return taskInfoPtr->status;
+}
+
+std::string ThreadPool::getTaskStatusString(const std::string& taskId) {
+    return taskStatusToString(getTaskStatus(taskId));
+}
+
+// cancel a task
+bool ThreadPool::cancelTask(const std::string& taskId) {
+    // grab the lock to access to race-condition data taskIdMap
+    std::unique_lock lock(queue_mutex);
+    auto iter = taskIdMap.find(taskId);
+    if (iter == taskIdMap.end()) {
+        // not in the taskIdMap
+        return false;
+    }
+    std::shared_ptr<TaskInfo> taskInfoPtr = iter->second;
+    if (!taskInfoPtr) {
+        // no taskInfo
+        return false;
+    }
+    auto taskStatus = taskInfoPtr->status;
+    // check if condition meets
+    if (taskStatus == TaskStatus::RUNNING) {
+        return false;
+    }
+    // already completed or failed or cancelled
+    if (taskStatus == TaskStatus::COMPLETED || 
+        taskStatus == TaskStatus::FAILED ||
+        taskStatus == TaskStatus::CANCELED
+    ) {
+        return false;
+    }
+    taskStatus = TaskStatus::CANCELED;
+    return true;
+
+}
+
+// executeTimoutTask
+void ThreadPool::executeTimoutTask(std::shared_ptr<TaskInfo> taskInfoPtr, bool& isTimeout) {
+    // variable for task complted. used to check if task is timout
+    // use atomic for race-condition
+    std::atomic<bool> taskCompleted = false; 
+    // catch error in another thread
+    std::exception_ptr taskException = nullptr;
+    // if pointer points to null, throw error in current thread.
+    if (taskInfoPtr == nullptr) {
+        throw std::runtime_error("cannot execute task since no task exist");
+    }
+    // execute the task in another thread
+    // taskComplted will be accessed in another thread.
+    auto taskThread = std::thread([taskInfoPtr, &taskCompleted, &taskException]() -> void {
+        try {
+            auto task = taskInfoPtr->task;
+            task();
+            taskCompleted = true;
+        } catch(...) {
+            taskCompleted = true;
+            taskException = std::current_exception();
+        }
+    });
+    // detach the current thread. run in background
+    taskThread.detach();
+    // use current thread to check if task is timeout
+    auto startTime = std::chrono::steady_clock::now();
+    auto waitUntil = startTime + taskInfoPtr->timeout;
+    // taskComplted will be accessed in current thread
+    while (std::chrono::steady_clock::now() < waitUntil && !taskCompleted) {
+        // sleep 10 milliseconds.
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // run out of the loop
+    // check if the task is completed or timeout
+    if (!taskCompleted) {
+        isTimeout = true;
+        throw std::runtime_error("task is timeout");
+    };
+    // if taskCompleted, but has error, rethrow the error
+    if (taskException) {
+        std::rethrow_exception(taskException);
+    }
+}
+
+
+// execute a task
+void ThreadPool::executeTask(std::shared_ptr<TaskInfo> taskInfoPtr) {
+    // the task is a lamda function, [task] -> { *task(); };
+    if (taskInfoPtr && taskInfoPtr->task) { 
+        bool isTimeout = false;
+        // enter running status
+        taskInfoPtr->status = TaskStatus::RUNNING;
+        try {
+            // check if the task has timeout feature
+            if (taskInfoPtr->timeout.count() > 0) {
+              // execute timeout task
+              executeTimoutTask(taskInfoPtr, isTimeout);
+            } else {
+                auto task = taskInfoPtr->task;
+                task();
+            }
+            taskInfoPtr->status = TaskStatus::COMPLETED;
+            metrics.completedTaskCount++;
+        } catch(const std::exception& e) {
+            // process the error
+            taskInfoPtr->status = TaskStatus::FAILED;
+            taskInfoPtr->errorMessage = e.what();
+            if (isTimeout) {
+                metrics.timedOutTasks++;
+            } else {
+                // failedTask
+                metrics.failedTaskCount++;
+            }
+            std::cerr << "异常发生在任务中: " << e.what() << std::endl;
+        } catch(...) {
+            taskInfoPtr->status = TaskStatus::FAILED;
+            taskInfoPtr->errorMessage = "unkown error";
+            std::cerr << "未知异常发生在任务中" << std::endl;
+            metrics.failedTaskCount++;
+        }
+    }
+}
+
+// get a task
+std::shared_ptr<TaskInfo> ThreadPool::getTask(bool& hasTask) {
+    hasTask = false;
+    std::shared_ptr<TaskInfo> taskInfoPtr { nullptr };
+    while (tasks.size() > 0) {
+        taskInfoPtr = tasks.top();
+        tasks.pop();
+         // check if task is cancelled, if cancelled, look for another task
+        if (taskInfoPtr && taskInfoPtr->status == TaskStatus::CANCELED) {
+            hasTask = false;
+            taskInfoPtr = nullptr;
+            continue;
+        }
+        hasTask = true;
+        break;
+    }
+    return taskInfoPtr;
+}
+
 // wokrer thread
 // used for process task
 void ThreadPool::workerThread(size_t id) {
@@ -160,62 +309,40 @@ void ThreadPool::workerThread(size_t id) {
             });
             // if thread_pool stopped, and no tasks in the queue. exit
             if (this->stop && this->tasks.empty()) {
+                // terminate the loop
                 return;
             }
             // if thread to stop, delete threadId form the vector
-            auto iter = threadsToStop.begin(); 
-            while (iter != threadsToStop.end()) {
-                size_t threadId = *iter;
-                if (threadId == id) {
-                    iter = threadsToStop.erase(iter);
-                } else {
-                    iter++;
-                }
-            }
+            // erase parameter can be a iterator or a element
+            threadsToStop.erase(id);
             // not wait
             metrics.waitingThreadCount--;
-            // find task from queue
-            if (tasks.size() > 0) {
-                taskInfoPtr = tasks.top();
-                tasks.pop();    
-                hasTask = true; 
-            }   
+            taskInfoPtr = getTask(hasTask);
         }
-        // get startTime
-        auto startTime = std::chrono::steady_clock::now();
-        // the task is a lamda function, [task] -> { *task(); };
+        
         if (hasTask && taskInfoPtr && taskInfoPtr->task) {
             // execute task
             // not in sleep
             metrics.activeThreadCount++;
             metrics.updateActiveThreads(metrics.activeThreadCount);
-            try {
-                auto task = taskInfoPtr->task;
-                task();
-                metrics.completedTaskCount++;
-            } catch(const std::exception& e) {
-                std::cerr << "异常发生在任务中: " << e.what() << std::endl;
-                metrics.failedTaskCount++;
-            } catch(...) {
-                std::cerr << "未知异常发生在任务中" << std::endl;
-                metrics.failedTaskCount++;
-            }
-            // remove taskId from taskIdMap, after execute the task
-            // {
-            //     // grab the lock
-            //     std::unique_lock lock(queue_mutex);
-            //     auto taskId = taskInfoPtr->taskId;
-            //     taskIdMap.erase(taskId);
-            // }
-            // update finish task, regardless whether the task failed or not
-            // use atomic, get rid of lock
-            metrics.activeThreadCount--;
+            // get startTime
+            auto startTime = std::chrono::steady_clock::now();
+            executeTask(taskInfoPtr);
             auto endTime = std::chrono::steady_clock::now();
             // duration Time
             auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startTime);
             metrics.addTaskTime(duration.count());
-            // notify one wait condition
-            wait_condition.notify_one();
+            metrics.activeThreadCount--;
+            
+            // remove taskId from taskIdMap, after execute the task
+            {
+                // grab the lock
+                std::unique_lock lock(queue_mutex);
+                auto taskId = taskInfoPtr->taskId;
+                taskIdMap.erase(taskId);
+            }
         }
+        // wake wait for all tasks
+        wait_condition.notify_one();
     }
 }   

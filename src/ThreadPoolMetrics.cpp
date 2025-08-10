@@ -60,6 +60,7 @@ std::string ThreadPoolMetrics::getReport() const {
     ss << "  总任务数: " << totalTasks.load() << std::endl;
     ss << "  已完成任务数: " << completedTaskCount.load() << std::endl;
     ss << "  失败任务数: " << failedTaskCount.load() << std::endl;
+    ss << "  超时任务数: " << timedOutTasks.load() << std::endl;
     ss << "  当前活跃线程数: " << activeThreadCount.load() << std::endl;
     ss << "  峰值活跃线程数: " << peakThreads.load() << std::endl;
     ss << "  峰值队列大小: " << peakQueueSize.load() << std::endl;

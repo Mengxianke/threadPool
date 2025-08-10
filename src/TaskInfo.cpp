@@ -4,12 +4,15 @@
 TaskInfo::TaskInfo(std::function<void()> t,
                  TaskPriority p,
                  std::string id,
-                 std::string desc)
+                 std::string desc,
+                 std::chrono::milliseconds timeout
+                )
     : task(std::move(t))
     , priority(p)
     , submitTime(std::chrono::steady_clock::now())
     , taskId(std::move(id))
     , description(std::move(desc))
+    , timeout(timeout)
 {
     // 为了避免时间精度问题，添加微小的延迟确保时间戳不同
    // std::this_thread::sleep_for(std::chrono::nanoseconds(1));

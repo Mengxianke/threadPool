@@ -19,7 +19,8 @@ enum class TaskStatus {
     RUNNING,
     COMPLETED,
     FAILED,
-    CANCELED
+    CANCELED,
+    NOT_FOUND    // 任务不存在
 };
 
 // 任务信息结构
@@ -31,12 +32,14 @@ struct TaskInfo {
     std::string description;
     TaskStatus status{ TaskStatus::WAITING };
     std::string errorMessage;
-
+    std::chrono::milliseconds timeout{0};
     // 构造函数
     TaskInfo(std::function<void()> t = nullptr,
              TaskPriority p = TaskPriority::MEDIUM,
              std::string id = "",
-             std::string desc = "");
+             std::string desc = "",
+             std::chrono::milliseconds timeout = std::chrono::milliseconds(0)
+            );
 
     // 比较运算符重载，用于优先级队列
     bool operator<(const TaskInfo& other) const;

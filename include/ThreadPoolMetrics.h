@@ -20,6 +20,8 @@ struct ThreadPoolMetrics {
     std::atomic<size_t> waitingThreadCount{0};
     // atomici variable for failed tasks count
     std::atomic<size_t> failedTaskCount{0};
+    // timeout task
+    std::atomic<size_t> timedOutTasks{0};
     std::chrono::steady_clock::time_point startTime;  // 线程池启动时间
 
     // constructor 

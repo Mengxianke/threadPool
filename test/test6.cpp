@@ -157,6 +157,7 @@ int main() {
                     "task-" + std::to_string(task.id),
                     task.desc,
                     task.priority,
+                    std::chrono::milliseconds(0),
                     simpleComputeTask, task.id, task.priority
                 )
             );
@@ -183,6 +184,7 @@ int main() {
             "special-task", 
             "这是一个带ID和描述的特殊任务", 
             TaskPriority::HIGH, 
+            std::chrono::milliseconds(0),
             ioTask, "特殊任务", 200, TaskPriority::HIGH
         );
 
@@ -206,6 +208,7 @@ int main() {
                     "risky-" + std::to_string(i),
                     "可能失败的任务 " + std::to_string(i),
                     TaskPriority::MEDIUM,
+                    std::chrono::milliseconds(0),
                     riskyTask, i, shouldFail, TaskPriority::MEDIUM
                 )
             );

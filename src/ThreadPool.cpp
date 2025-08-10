@@ -178,7 +178,7 @@ bool ThreadPool::cancelTask(const std::string& taskId) {
     ) {
         return false;
     }
-    taskStatus = TaskStatus::CANCELED;
+    taskInfoPtr->status = TaskStatus::CANCELED;
     return true;
 
 }
@@ -237,31 +237,21 @@ void ThreadPool::executeTask(std::shared_ptr<TaskInfo> taskInfoPtr) {
         // enter running status
         taskInfoPtr->status = TaskStatus::RUNNING;
         try {
-            // check if the task has timeout feature
-            if (taskInfoPtr->timeout.count() > 0) {
-              // execute timeout task
-              executeTimoutTask(taskInfoPtr, isTimeout);
-            } else {
-                auto task = taskInfoPtr->task;
-                task();
-            }
+            auto task = taskInfoPtr->task;
+            task();
             taskInfoPtr->status = TaskStatus::COMPLETED;
             metrics.completedTaskCount++;
         } catch(const std::exception& e) {
             // process the error
             taskInfoPtr->status = TaskStatus::FAILED;
             taskInfoPtr->errorMessage = e.what();
-            if (isTimeout) {
-                metrics.timedOutTasks++;
-            } else {
-                // failedTask
-                metrics.failedTaskCount++;
-            }
-            std::cerr << "异常发生在任务中: " << e.what() << std::endl;
+            // failedTask
+            metrics.failedTaskCount++;
+            std::cerr << "异常发生在任务中: " + taskInfoPtr->taskId << e.what() << std::endl;
         } catch(...) {
             taskInfoPtr->status = TaskStatus::FAILED;
             taskInfoPtr->errorMessage = "unkown error";
-            std::cerr << "未知异常发生在任务中" << std::endl;
+            std::cerr << "未知异常发生在任务中" + taskInfoPtr->taskId << std::endl;
             metrics.failedTaskCount++;
         }
     }

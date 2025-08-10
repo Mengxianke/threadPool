@@ -19,292 +19,320 @@
 
 // priority queue compare func
 struct cmp {
-bool operator()(std::shared_ptr<TaskInfo>& taskInfo1, std::shared_ptr<TaskInfo>& taskInfo2) {
-    // priority
-    const TaskPriority& task1Priority = taskInfo1->priority;
-    const TaskPriority& task2Priority = taskInfo2->priority;
-    // taskSubmitTime
-    const std::chrono::steady_clock::time_point& task1SubmitTime = taskInfo1->submitTime;
-    const std::chrono::steady_clock::time_point& task2SubmitTime = taskInfo2->submitTime;
-    // compare taskPriority and taskSubmitTime
-    if (task1Priority > task2Priority) {
-        // maintain
-        return false;
-    } else if(task1Priority < task2Priority) {
-        // down
-        return true;
-    } else {
-        // equal condition, compare submit time
-        if (task1SubmitTime > task2SubmitTime) return true;
-        return false; 
+    bool operator()(std::shared_ptr<TaskInfo>& taskInfo1, std::shared_ptr<TaskInfo>& taskInfo2) {
+        // priority
+        const TaskPriority& task1Priority = taskInfo1->priority;
+        const TaskPriority& task2Priority = taskInfo2->priority;
+        // taskSubmitTime
+        const std::chrono::steady_clock::time_point& task1SubmitTime = taskInfo1->submitTime;
+        const std::chrono::steady_clock::time_point& task2SubmitTime = taskInfo2->submitTime;
+        // compare taskPriority and taskSubmitTime
+        if (task1Priority > task2Priority) {
+            // maintain
+            return false;
+        } else if(task1Priority < task2Priority) {
+            // down
+            return true;
+        } else {
+            // equal condition, compare submit time
+            if (task1SubmitTime > task2SubmitTime) return true;
+            return false; 
+        }
     }
-}
 };
 
 
 class ThreadPool {
 public:
-// 构造函数，创建指定数量的工作线程
-ThreadPool(size_t threads);
+    // 构造函数，创建指定数量的工作线程
+    ThreadPool(size_t threads);
+    
+    // 禁用拷贝构造函数和赋值操作符
+    ThreadPool(const ThreadPool&) = delete;
+    ThreadPool& operator=(const ThreadPool&) = delete;
+    
+    // 析构函数
+    ~ThreadPool();
+    // pause workers
+    void pause();
+    // remsue workers
+    void resume();
+    // enqueue task
+    // std::future<void> enqueue(std::function<void()> task);
+    // template<class F, class... Args>
+    // auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
+    template<class F, class... Args>
+    auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
 
-// 禁用拷贝构造函数和赋值操作符
-ThreadPool(const ThreadPool&) = delete;
-ThreadPool& operator=(const ThreadPool&) = delete;
+    template<class F, class... Args>
+    auto enqueueWithPriority(
+        TaskPriority priorty, 
+        std::chrono::milliseconds timeout, 
+        F&& f, 
+        Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
 
-// 析构函数
-~ThreadPool();
-// pause workers
-void pause();
-// remsue workers
-void resume();
-// enqueue task
-// std::future<void> enqueue(std::function<void()> task);
-// template<class F, class... Args>
-// auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
-template<class F, class... Args>
-auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
+    template<class F, class... Args>
+    auto enqueueWithInfo(
+        std::string taskId, 
+        std::string description, 
+        TaskPriority priority, 
+        std::chrono::milliseconds timeout,
+        F&&f, 
+        Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
+    
+    template<class F>
+    auto enqueueMany(
+        const std::vector<F>& tasks,
+        TaskPriority priority, 
+        std::chrono::milliseconds timeout
+    ) -> std::vector<std::future<typename std::invoke_result<F>::type>>;
+    
+    template<class F>
+    auto enqueueManyWithIdPrefix(
+        const std::string& idPrefix,
+        const std::string& descriptionPrefix,
+        const std::vector<F>& tasks,
+        TaskPriority priority, std::chrono::milliseconds timeout
+    ) -> std::vector<std::future<typename std::invoke_result<F>::type>>;
 
-template<class F, class... Args>
-auto enqueueWithPriority(
-    TaskPriority priorty, 
-    std::chrono::milliseconds timeout, 
-    F&& f, 
-    Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
-
-template<class F, class... Args>
-auto enqueueWithInfo(
-    std::string taskId, 
-    std::string description, 
-    TaskPriority priority, 
-    std::chrono::milliseconds timeout,
-    F&&f, 
-    Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
-
-template<class F>
-auto enqueueMany(
-    const std::vector<F>& tasks,
-    TaskPriority priority, 
-    std::chrono::milliseconds timeout
-) -> std::vector<std::future<typename std::invoke_result<F>::type>>;
-
-template<class F>
-auto enqueueManyWithIdPrefix(
-    const std::string& idPrefix,
-    const std::string& descriptionPrefix,
-    const std::vector<F>& tasks,
-    TaskPriority priority, std::chrono::milliseconds timeout
-) -> std::vector<std::future<typename std::invoke_result<F>::type>>;
-
-// public method
-bool isStopped() const { return stop; }
-// get total number of thread in workers
-size_t getThreadCount();
-// get number of task in the taskQueue
-size_t getTaskCount();
-// get the number of completed task count
-size_t getCompletedTaskCount();
-// get active thread count, some tasks sleep or not work, only count thread that execute task
-size_t getActiveThreadCount();
-// waiting thread count
-size_t getWaitingThreadCount();
-// get failed task count
-size_t getFailedTaskCount();
-// wait for all tasks in taskQueue to finish
-void waitForTasks();
-// clear all tasks
-void clearTasks();
-// resize thread count in worker
-void resize(size_t threads);
-//
-std::string getMetricsReport() {
-    return this->metrics.getReport();
-}
-// cancel a task
-bool cancelTask(const std::string& taskId);
-// access to task status
-std::string getTaskStatusString(const std::string& taskId);
-// getTaskStatus by taskId
-TaskStatus getTaskStatus(const std::string& taskId);
+    // public method
+    bool isStopped() const { return stop; }
+    // get total number of thread in workers
+    size_t getThreadCount();
+    // get number of task in the taskQueue
+    size_t getTaskCount();
+    // get the number of completed task count
+    size_t getCompletedTaskCount();
+    // get active thread count, some tasks sleep or not work, only count thread that execute task
+    size_t getActiveThreadCount();
+    // waiting thread count
+    size_t getWaitingThreadCount();
+    // get failed task count
+    size_t getFailedTaskCount();
+    // wait for all tasks in taskQueue to finish
+    void waitForTasks();
+    // clear all tasks
+    void clearTasks();
+    // resize thread count in worker
+    void resize(size_t threads);
+    //
+    std::string getMetricsReport() {
+        return this->metrics.getReport();
+    }
+    // cancel a task
+    bool cancelTask(const std::string& taskId);
+    // access to task status
+    std::string getTaskStatusString(const std::string& taskId);
+    // getTaskStatus by taskId
+    TaskStatus getTaskStatus(const std::string& taskId);
 
 private:
-// 工作线程容器 
-std::vector<std::thread> workers;
+    // 工作线程容器 
+    std::vector<std::thread> workers;
 
-// threads to stop when resize the worker
-std::unordered_set<size_t> threadsToStop;
-
-// 任务队列
-// std::queue<function<void()>> tasks;
-// 
-std::priority_queue<std::shared_ptr<TaskInfo>, std::vector<std::shared_ptr<TaskInfo>>, cmp> tasks;
+    // threads to stop when resize the worker
+    std::unordered_set<size_t> threadsToStop;
     
-// 同步机制
-std::mutex queue_mutex; 
-// use one condition_variable to wake or block thread for different conditions
-std::condition_variable condition;
-// wait for all tasks to finish variable condition
-std::condition_variable wait_condition;
-
-// 控制线程池停止
-std::atomic<bool> stop{false};
-// worker Thread
-void workerThread(size_t id);
-// status
-bool isPaused = false;
-// metrics
-ThreadPoolMetrics metrics;
-// unique_task_map, build relationShip between taskId and taskInfo
-std::unordered_map<std::string, std::shared_ptr<TaskInfo>> taskIdMap;
-// exectueTask
-void executeTask(std::shared_ptr<TaskInfo> taskInfoPtr);
-// executeTimoutTask
-void executeTimoutTask(std::shared_ptr<TaskInfo> taskInfoPtr, bool& isTimeout);
-// lookForTask
-std::shared_ptr<TaskInfo> getTask(bool& hasTask);
+    // 任务队列
+    // std::queue<function<void()>> tasks;
+    // 
+    std::priority_queue<std::shared_ptr<TaskInfo>, std::vector<std::shared_ptr<TaskInfo>>, cmp> tasks;
+        
+    // 同步机制
+    std::mutex queue_mutex; 
+    // use one condition_variable to wake or block thread for different conditions
+    std::condition_variable condition;
+    // wait for all tasks to finish variable condition
+    std::condition_variable wait_condition;
+    
+    // 控制线程池停止
+    std::atomic<bool> stop{false};
+    // worker Thread
+    void workerThread(size_t id);
+    // status
+    bool isPaused = false;
+    // metrics
+    ThreadPoolMetrics metrics;
+    // unique_task_map, build relationShip between taskId and taskInfo
+    std::unordered_map<std::string, std::shared_ptr<TaskInfo>> taskIdMap;
+    // exectueTask
+    void executeTask(std::shared_ptr<TaskInfo> taskInfoPtr);
+    // executeTimoutTask
+    void executeTimoutTask(std::shared_ptr<TaskInfo> taskInfoPtr, bool& isTimeout);
+    // lookForTask
+    std::shared_ptr<TaskInfo> getTask(bool& hasTask);
 };
 
 
-
 template<class F, class... Args>
-auto ThreadPool::enqueueWithInfo(
-    std::string taskId, 
-    std::string description, 
-    TaskPriority priority, 
-    std::chrono::milliseconds timeout,
-    F&& f, 
-    Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
-    using return_type = typename std::invoke_result<F, Args...>::type;
-    // taskPromise, use shared_ptr to control the lifecylce of taskPromise
-    // different place will use taskPromise;
-    std::shared_ptr<std::promise<return_type>> taskPromise = std::make_shared<std::promise<return_type>>();
-    // get future
-    auto future = taskPromise->get_future();
-    // create a task
-    std::function<return_type()> _task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
-    // task, use shared_ptr, lamada function use copy. more pointer points to taskPromise.
-    // all shared_ptr destory, free promise object.
-    std::function<void()> task = [
-        _task, 
-        taskPromise]() -> void  {
-            try {
-                if constexpr (std::is_void_v<return_type>) {
-                    _task();
-                    taskPromise->set_value();
-                } else {
-                    return_type result = _task();
-                    taskPromise->set_value(result);
-                }
-            } catch  (const std::exception& e) {
-                // promise set_exception
-                taskPromise->set_exception(std::current_exception());
-                // throw the error
-                throw;
-            } catch(...) {
-                taskPromise->set_exception(std::current_exception());
-                throw;
+    auto ThreadPool::enqueueWithInfo(
+        std::string taskId, 
+        std::string description, 
+        TaskPriority priority, 
+        std::chrono::milliseconds timeout,
+        F&& f, 
+        Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
+        using return_type = typename std::invoke_result<F, Args...>::type;
+        // taskPromise, use shared_ptr to control the lifecylce of taskPromise
+        // different place will use taskPromise;
+        std::shared_ptr<std::promise<return_type>> taskPromise = std::make_shared<std::promise<return_type>>();
+        // get future
+        auto future = taskPromise->get_future();
+        
+        // run timeout in another thread
+        auto timetoutThread = std::thread([this, taskPromise, timeout, taskId]() -> void {
+            // check if task has timeout
+            if (timeout.count() <= 0) {
+                return;
             }
-        };
-    {
-        // grab the lock for race-condition data.
-        std::unique_lock lock(queue_mutex);
-        // is stop
-        if(stop) {
-            throw std::runtime_error("enqueue on stopped ThreadPool");
-        };
-        // check if has duplicate taskId
-        if (!taskId.empty() && taskIdMap.find(taskId) != taskIdMap.end()) {
-            throw std::runtime_error("Task ID '" + taskId + "' already exists");
-        };
-        // use make_shared to create a object on heap. use shared_ptr to control the lifeCycle of a TaskInfo
-        auto newTask = std::make_shared<TaskInfo> (
-            std::move(task),
-            priority,
-            taskId,
-            description,
-            timeout
-        );
-        // emplace the taskInfo
-        tasks.emplace(newTask);
-        // set key-value pare for duplicate task
-        if (!taskId.empty()) {
-            taskIdMap[taskId] = newTask; 
-        };
-        metrics.totalTasks++;
-        metrics.updateQueueSize(tasks.size());
-    }
-    // weak one thread to process the task
-    condition.notify_one();
-    return future;
+            auto startTime = std::chrono::steady_clock::now();
+            auto waitUntil = startTime + timeout;
+            while (std::chrono::steady_clock::now() < waitUntil) {
+                // sleep 10 milliseconds.
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            };
+            // wait until timeout
+            try {
+                std::cout << "try to set exception for timeout " + taskId << std::endl;
+                // try to set exception for the promise
+                taskPromise->set_exception(std::make_exception_ptr(std::runtime_error("run task " + taskId + " timeout")));
+                // udpate metrics
+                metrics.timedOutTasks++;
+                // update task status to failed
+            } catch(...) {
+                std::cout << "tiemout set_exception has error" << std::endl;
+                // not update any metrics
+            }
+        });
+        // detach the current thread;
+        timetoutThread.detach();
+
+        // create a task
+        std::function<return_type()> _task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
+        // task, use shared_ptr, lamada function use copy. more pointer points to taskPromise.
+        // all shared_ptr destory, free promise object.
+        std::function<void()> task = [
+            _task, 
+            taskPromise]() -> void  {
+                try {
+                    if constexpr (std::is_void_v<return_type>) {
+                        _task();
+                        taskPromise->set_value();
+                    } else {
+                        return_type result = _task();
+                        taskPromise->set_value(result);
+                    }
+                } catch  (const std::exception& e) {
+                    // promise set_exception
+                    taskPromise->set_exception(std::current_exception());
+                    throw;
+                } catch(...) {
+                    taskPromise->set_exception(std::current_exception());
+                    throw;
+                }
+            };
+        {
+            // grab the lock for race-condition data.
+            std::unique_lock lock(queue_mutex);
+            // is stop
+            if(stop) {
+                throw std::runtime_error("enqueue on stopped ThreadPool");
+            };
+            // check if has duplicate taskId
+            if (!taskId.empty() && taskIdMap.find(taskId) != taskIdMap.end()) {
+                throw std::runtime_error("Task ID '" + taskId + "' already exists");
+            };
+            // use make_shared to create a object on heap. use shared_ptr to control the lifeCycle of a TaskInfo
+            auto newTask = std::make_shared<TaskInfo> (
+                std::move(task),
+                priority,
+                taskId,
+                description,
+                timeout
+            );
+            // emplace the taskInfo
+            tasks.emplace(newTask);
+            // set key-value pare for duplicate task
+            if (!taskId.empty()) {
+                taskIdMap[taskId] = newTask; 
+            };
+            metrics.totalTasks++;
+            metrics.updateQueueSize(tasks.size());
+        }
+        // weak one thread to process the task
+        condition.notify_one();
+        
+        return future;
 }
 
 
 template<class F, class... Args>
-auto ThreadPool::enqueueWithPriority(
-    TaskPriority priorty, 
-    std::chrono::milliseconds timeout, 
-    F&& f, 
-    Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
-    return enqueueWithInfo(
-        "", 
-        "", 
-        priorty, 
-        timeout, 
-        std::forward<F>(f), 
-        std::forward<Args>(args)...);
+    auto ThreadPool::enqueueWithPriority(
+        TaskPriority priorty, 
+        std::chrono::milliseconds timeout, 
+        F&& f, 
+        Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
+        return enqueueWithInfo(
+            "", 
+            "", 
+            priorty, 
+            timeout, 
+            std::forward<F>(f), 
+            std::forward<Args>(args)...);
 } 
 
 
 template<class F, class... Args>
-auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
-// get a function return type
-return enqueueWithInfo(
-    "", 
-    "", 
-    TaskPriority::MEDIUM, 
-    std::chrono::milliseconds(0), 
-    std::forward<F>(f), 
-    std::forward<Args>(args)...);
+    auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
+    // get a function return type
+    return enqueueWithInfo(
+        "", 
+        "", 
+        TaskPriority::MEDIUM, 
+        std::chrono::milliseconds(0), 
+        std::forward<F>(f), 
+        std::forward<Args>(args)...);
 }
 
 
 // batch Enqueue
 template<class F>
 auto ThreadPool::enqueueMany(
-    const std::vector<F>& tasks,
-    TaskPriority priority, 
-    std::chrono::milliseconds timeout
-) -> std::vector<std::future<typename std::invoke_result<F>::type>> {
-// result
-using return_type = typename std::invoke_result<F>::type;
-std::vector<std::future<return_type>> futures;
-// reserve fixed size
-futures.reserve(tasks.size());
-for (const auto& task : tasks) {
-    futures.push_back(enqueueWithInfo("", "", priority, timeout, task));
-};
-return futures;
-};
-
-
-template<class F>
-auto ThreadPool::enqueueManyWithIdPrefix(
-    const std::string& idPrefix,
-    const std::string& descriptionPrefix,
-    const std::vector<F>& tasks,
-    TaskPriority priority, std::chrono::milliseconds timeout
-) -> std::vector<std::future<typename std::invoke_result<F>::type>> {
+        const std::vector<F>& tasks,
+        TaskPriority priority, 
+        std::chrono::milliseconds timeout
+    ) -> std::vector<std::future<typename std::invoke_result<F>::type>> {
+    // result
     using return_type = typename std::invoke_result<F>::type;
     std::vector<std::future<return_type>> futures;
     // reserve fixed size
     futures.reserve(tasks.size());
-    for (size_t i = 0; i < tasks.size(); i++) {
-        // generate taskId and description for the task
-        std::string taskId = idPrefix + "-" + std::to_string(i);
-        std::string description = descriptionPrefix + " " + std::to_string(i);
-        futures.push_back(enqueueWithInfo(taskId, description, priority, timeout, tasks[i]));
+    for (const auto& task : tasks) {
+        futures.push_back(enqueueWithInfo("", "", priority, timeout, task));
     };
     return futures;
 };
+
+
+template<class F>
+    auto ThreadPool::enqueueManyWithIdPrefix(
+        const std::string& idPrefix,
+        const std::string& descriptionPrefix,
+        const std::vector<F>& tasks,
+        TaskPriority priority, std::chrono::milliseconds timeout
+    ) -> std::vector<std::future<typename std::invoke_result<F>::type>> {
+        using return_type = typename std::invoke_result<F>::type;
+        std::vector<std::future<return_type>> futures;
+        // reserve fixed size
+        futures.reserve(tasks.size());
+        for (size_t i = 0; i < tasks.size(); i++) {
+            // generate taskId and description for the task
+            std::string taskId = idPrefix + "-" + std::to_string(i);
+            std::string description = descriptionPrefix + " " + std::to_string(i);
+            futures.push_back(enqueueWithInfo(taskId, description, priority, timeout, tasks[i]));
+        };
+        return futures;
+    };
 
 
 // use function template to customize different function with different arguments and return type
